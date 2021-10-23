@@ -4,6 +4,7 @@ from scapy.all import DNS, DNSQR, DNSRR, IP, send, sniff, sr1, UDP
 import json
 import subprocess
 import sys
+import base64
 
 UDP_PORT = 53
 UDP_IP = "127.0.0.1"
@@ -41,17 +42,16 @@ def ssl_connect(host):
 
 sock = udp_connect(UDP_IP, UDP_PORT)
 req_data, addr = sock.recvfrom(512)
-domain, record_type, src, sport = req_records(req_data)
-req_id = DNS(req_data)["DNS"].id
-print(
-    f"domain: {domain}, record_type: {record_type}, src: {src}, sport: {sport}, id: {req_id}")
+
+content_length = len(req_data)
+req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+req = bytes(req_header, 'utf-8') + req_data
 
 wsock = ssl_connect(DOH_HOST)
 
-request_msg = f"GET /dns-query?name={domain}&type={record_type} HTTP/1.1\r\nAccept: application/dns-json\r\nHost: 1.1.1.1:{sport}\r\n\r\n"
-wsock.send(request_msg.encode())
+wsock.send(req)
 data = wsock.recv(2048)
+print(f"data: {data}")
 data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
-# DNS(data_body).show()
-# print(f"data: {data_body}")
+print(f"body: {data_body}")
 sock.sendto(data_body, addr)
