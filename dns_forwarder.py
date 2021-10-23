@@ -40,18 +40,23 @@ def ssl_connect(host):
     return wsock
 
 
-sock = udp_connect(UDP_IP, UDP_PORT)
-req_data, addr = sock.recvfrom(512)
+def main():
+    sock = udp_connect(UDP_IP, UDP_PORT)
+    req_data, addr = sock.recvfrom(512)
 
-content_length = len(req_data)
-req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
-req = bytes(req_header, 'utf-8') + req_data
+    content_length = len(req_data)
+    req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+    req = bytes(req_header, 'utf-8') + req_data
 
-wsock = ssl_connect(DOH_HOST)
+    wsock = ssl_connect(DOH_HOST)
 
-wsock.send(req)
-data = wsock.recv(2048)
-print(f"data: {data}")
-data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
-print(f"body: {data_body}")
-sock.sendto(data_body, addr)
+    wsock.send(req)
+    data = wsock.recv(2048)
+    print(f"data: {data}")
+    data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
+    print(f"body: {data_body}")
+    sock.sendto(data_body, addr)
+
+
+if __name__ == "__main__":
+    main()
