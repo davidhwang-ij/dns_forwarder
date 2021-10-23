@@ -1,10 +1,10 @@
 import socket
 import ssl
-import base64
 from scapy.all import DNS, DNSQR, DNSRR, IP, send, sniff, sr1, UDP
 import json
 import subprocess
 import sys
+import base64
 
 UDP_PORT = 53
 UDP_IP = "127.0.0.1"
@@ -18,22 +18,40 @@ def dns_record(dns_id):
         return 'AAAA'
 
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((UDP_IP, UDP_PORT))
+def udp_connect(ip, port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((ip, port))
+    return sock
 
-data, addr = sock.recvfrom(512)
-qname = DNS(data)["DNS Question Record"].qname
-qtype = dns_record(DNS(data)["DNS Question Record"].qtype)
-print(f"qname: {qname}, qtype: {qtype}")
 
-context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-wsock = context.wrap_socket(sock, server_hostname=DOH_HOST)
-wsock.connect((DOH_HOST, 443))
+def req_records(data):
+    qname = DNS(data)["DNS Question Record"].qname
+    qtype = dns_record(DNS(data)["DNS Question Record"].qtype)
+    src = IP(data)["IP"].src
+    sport = UDP(data)["UDP"].sport
+    return qname, qtype, src, sport
 
-request_msg = f"GET /dns-query?name={qname}&type={qtype} HTTP/1.1\r\nAccept: application/dns-json\r\nHost: 1.1.1.1\r\n\r\n"
-wsock.send(request_msg.encode())
 
+def ssl_connect(host):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    wsock = context.wrap_socket(sock, server_hostname=host)
+    wsock.connect((host, 443))
+    return wsock
+
+
+sock = udp_connect(UDP_IP, UDP_PORT)
+req_data, addr = sock.recvfrom(512)
+
+content_length = len(req_data)
+req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+req = bytes(req_header, 'utf-8') + req_data
+
+wsock = ssl_connect(DOH_HOST)
+
+wsock.send(req)
 data = wsock.recv(2048)
-print(data)
-wsock.close()
+print(f"data: {data}")
+data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
+print(f"body: {data_body}")
+sock.sendto(data_body, addr)
