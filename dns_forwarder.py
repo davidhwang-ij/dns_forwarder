@@ -20,11 +20,19 @@ def udp_connect(ip, port):
     return sock
 
 
+def decode_qname(qname):
+    decoded_qname = qname.decode("utf-8")
+    qname_length = len(decoded_qname)
+    hostname = decoded_qname[:qname_length-1]
+    return hostname
+
+
 def req_records(data):
     qname = DNS(data)["DNS Question Record"].qname
+    hostname = decode_qname(qname)
     qtype = dns_record(DNS(data)["DNS Question Record"].qtype)
     req_id = DNS(data)["DNS"].id
-    return qname, qtype, req_id
+    return hostname, qtype, req_id
 
 
 def ssl_connect(host):
@@ -43,12 +51,8 @@ def write_to_log(hostname, record_type, isDenied):
     f.close()
 
 
-def isin_deny_list(data, qname, record_type):
+def isin_deny_list(hostname, record_type):
     isDenied = False
-
-    decoded_qname = qname.decode("utf-8")
-    qname_length = len(decoded_qname)
-    hostname = decoded_qname[:qname_length-1]
 
     with open('deny_list.txt') as f:
         lines = f.readlines()
@@ -64,21 +68,29 @@ def isin_deny_list(data, qname, record_type):
     return isDenied
 
 
-def send_nxdomain(data, req_id):
-    # nx = IP(data)
-    # nx[DNS] = DNS()
-    print(f"data: {data}, req id: {req_id}")
+def nxdomain(hostname, record_type, req_id):
+    nx = DNS(id=req_id, qr=0, opcode="QUERY",
+             rd=1, ra=0, ad=1, rcode=3,
+             ancount=0, nscount=0, arcount=1,
+             qd=DNSQR(qname=hostname, qtype=record_type),
+             an=None, ns=None, ar=None)
+    return bytes(nx)
 
 
 def main():
     sock = udp_connect(UDP_IP, UDP_PORT)
     req_data, addr = sock.recvfrom(512)
-    qname, record_type, req_id = req_records(req_data)
-    isDenied = isin_deny_list(req_data, qname, record_type)
-    if isDenied:
-        send_nxdomain(req_data, req_id)
 
-    print(f"Denied: {isDenied}")
+    DNS(req_data).show()
+
+    hostname, record_type, req_id = req_records(req_data)
+    print(f"hostname: {hostname}")
+    isDenied = isin_deny_list(hostname, record_type)
+    if isDenied:
+        nx = nxdomain(hostname, record_type, req_id)
+        sock.sendto(nx, addr)
+
+    # print(f"Denied: {isDenied}")
 
     # content_length = len(req_data)
     # req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
