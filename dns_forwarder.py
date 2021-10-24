@@ -1,10 +1,6 @@
 import socket
 import ssl
 from scapy.all import DNS, DNSQR, DNSRR, IP, send, sniff, sr1, UDP
-import json
-import subprocess
-import sys
-import base64
 
 UDP_PORT = 53
 UDP_IP = "127.0.0.1"
@@ -24,12 +20,19 @@ def udp_connect(ip, port):
     return sock
 
 
+def decode_qname(qname):
+    decoded_qname = qname.decode("utf-8")
+    qname_length = len(decoded_qname)
+    hostname = decoded_qname[:qname_length-1]
+    return hostname
+
+
 def req_records(data):
     qname = DNS(data)["DNS Question Record"].qname
+    hostname = decode_qname(qname)
     qtype = dns_record(DNS(data)["DNS Question Record"].qtype)
-    src = IP(data)["IP"].src
-    sport = UDP(data)["UDP"].sport
-    return qname, qtype, src, sport
+    req_id = DNS(data)["DNS"].id
+    return hostname, qtype, req_id
 
 
 def ssl_connect(host):
@@ -40,18 +43,68 @@ def ssl_connect(host):
     return wsock
 
 
-sock = udp_connect(UDP_IP, UDP_PORT)
-req_data, addr = sock.recvfrom(512)
+def write_to_log(hostname, record_type, isDenied):
+    print(f"hostname: {hostname}, record type: {record_type}")
+    status = "DENY" if isDenied else "ALLOW"
+    f = open("./queries.log", "a")
+    f.write(f"{hostname} {record_type} {status}\n")
+    f.close()
 
-content_length = len(req_data)
-req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
-req = bytes(req_header, 'utf-8') + req_data
 
-wsock = ssl_connect(DOH_HOST)
+def isin_deny_list(hostname, record_type):
+    isDenied = False
 
-wsock.send(req)
-data = wsock.recv(2048)
-print(f"data: {data}")
-data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
-print(f"body: {data_body}")
-sock.sendto(data_body, addr)
+    with open('deny_list.txt') as f:
+        lines = f.readlines()
+
+    for line in lines:
+        # check if the flag exists
+        if (line == hostname + "\n"):
+            isDenied = True
+        write_to_log(hostname, record_type, isDenied)
+        if isDenied:
+            break
+
+    return isDenied
+
+
+def nxdomain(hostname, record_type, req_id):
+    nx = DNS(id=req_id, qr=0, opcode="QUERY",
+             rd=1, ra=0, ad=1, rcode=3,
+             ancount=0, nscount=0, arcount=1,
+             qd=DNSQR(qname=hostname, qtype=record_type),
+             an=None, ns=None, ar=None)
+    return bytes(nx)
+
+
+def main():
+    sock = udp_connect(UDP_IP, UDP_PORT)
+    req_data, addr = sock.recvfrom(512)
+
+    DNS(req_data).show()
+
+    hostname, record_type, req_id = req_records(req_data)
+    print(f"hostname: {hostname}")
+    isDenied = isin_deny_list(hostname, record_type)
+    if isDenied:
+        nx = nxdomain(hostname, record_type, req_id)
+        sock.sendto(nx, addr)
+
+    # print(f"Denied: {isDenied}")
+
+    # content_length = len(req_data)
+    # req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+    # req = bytes(req_header, 'utf-8') + req_data
+
+    # wsock = ssl_connect(DOH_HOST)
+
+    # wsock.send(req)
+    # data = wsock.recv(2048)
+    # print(f"data: {data}")
+    # data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
+    # print(f"body: {data_body}")
+    # sock.sendto(data_body, addr)
+
+
+if __name__ == "__main__":
+    main()
