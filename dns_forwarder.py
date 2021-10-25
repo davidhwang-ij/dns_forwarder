@@ -1,7 +1,9 @@
 import socket
 import ssl
-from scapy.all import DNS, DNSQR
+from scapy.all import DNS, DNSQR, Raw
 import argparse
+import time
+import base64
 
 parser = argparse.ArgumentParser(
     description="Run a DNS forwarder to forward your request to a DoH server")
@@ -101,6 +103,7 @@ def nxdomain(hostname, record_type, req_id):
 
 
 def udp_forward(req_data):
+    time.sleep(1)
     sock = udp_connect(UDP_IP, 12345)
     sock.sendto(req_data, (DST_IP, UDP_PORT))
     data, _ = sock.recvfrom(512)
@@ -108,18 +111,32 @@ def udp_forward(req_data):
     return data
 
 
-def doh_forward(req_data):
+def doh_forward(req_data, hostname, record_type, req_id):
     content_length = len(req_data)
-    req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
-    req = bytes(req_header, 'utf-8') + req_data
+
+    dns_req = DNS(id=0, qr=0, opcode="QUERY",
+                  aa=0, tc=0, rd=1, ra=0, z=0, ad=0, rcode="ok",
+                  qdcount=1, ancount=0, nscount=0, arcount=0,
+                  qd=DNSQR(
+                      qname=hostname, qtype=record_type),
+                  an=None, ns=None, ar=None)
+
+    dns_req_bytes = bytes(dns_req)
+    ed = base64.urlsafe_b64encode(dns_req_bytes)
+    dec = ed.decode('utf-8').split('=')[0]
+    print(f"DNS-QUERY: {dec}")
+    req = f"GET /dns-query?dns={dec} HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+    req_msg = req.encode()
 
     wsock = ssl_connect(DOH_SERVER)
-    wsock.send(req)
+    wsock.send(req_msg)
     data = wsock.recv(2048)
     print(f"data: {data}")
     data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
+    response = DNS(data_body)
+    response[DNS].id = req_id
 
-    return data_body
+    return bytes(response)
 
 
 def main():
@@ -137,7 +154,7 @@ def main():
                 # send over DNS
                 data = udp_forward(req_data)
             else:
-                data = doh_forward(req_data)
+                data = doh_forward(req_data, hostname, record_type, req_id)
 
             sock.sendto(data, addr)
 
