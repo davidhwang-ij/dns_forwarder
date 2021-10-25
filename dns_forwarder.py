@@ -1,10 +1,35 @@
 import socket
 import ssl
-from scapy.all import DNS, DNSQR, DNSRR, IP, send, sniff, sr1, UDP
+from scapy.all import DNS, DNSQR, Raw
+import argparse
+import time
+import base64
+
+parser = argparse.ArgumentParser(
+    description="Run a DNS forwarder to forward your request to a DoH server")
+parser.add_argument('-d', type=str, metavar='', dest='DST_IP',
+                    help='Destination DNS server IP')
+parser.add_argument('-f', type=str, metavar='', default='deny_list.txt',
+                    help='DENY_LIST_FILE containing domains to block')
+parser.add_argument('-l', type=str, metavar='', default='./queries.log',
+                    help='LOG_FILE Append-only log file')
+parser.add_argument('--doh', type=bool, metavar='', dest='DOH', default=False,
+                    help='Use default upstream DoH server')
+parser.add_argument('--doh_server', type=str, metavar='', dest='DOH_SERVER',
+                    help='User this upstream DoH server')
+
+args = parser.parse_args()
 
 UDP_PORT = 53
-UDP_IP = "127.0.0.1"
-DOH_HOST = '1.1.1.1'
+UDP_IP = '127.0.0.1'
+DST_IP = args.DST_IP
+DOH_SERVER = args.DOH_SERVER if args.DOH_SERVER != None else '1.1.1.1'
+# if only DOH is specified???
+
+# Handle Flag Errors
+if (args.DOH == False and args.DOH_SERVER == None and args.DST_IP == None):
+    print("If --doh and --doh_server are not specified, you must specify your -d")
+    exit(0)
 
 
 def dns_record(dns_id):
@@ -77,33 +102,61 @@ def nxdomain(hostname, record_type, req_id):
     return bytes(nx)
 
 
+def udp_forward(req_data):
+    time.sleep(1)
+    sock = udp_connect(UDP_IP, 12345)
+    sock.sendto(req_data, (DST_IP, UDP_PORT))
+    data, _ = sock.recvfrom(512)
+
+    return data
+
+
+def doh_forward(req_data, hostname, record_type, req_id):
+    content_length = len(req_data)
+
+    dns_req = DNS(id=0, qr=0, opcode="QUERY",
+                  aa=0, tc=0, rd=1, ra=0, z=0, ad=0, rcode="ok",
+                  qdcount=1, ancount=0, nscount=0, arcount=0,
+                  qd=DNSQR(
+                      qname=hostname, qtype=record_type),
+                  an=None, ns=None, ar=None)
+
+    dns_req_bytes = bytes(dns_req)
+    ed = base64.urlsafe_b64encode(dns_req_bytes)
+    dec = ed.decode('utf-8').split('=')[0]
+    print(f"DNS-QUERY: {dec}")
+    req = f"GET /dns-query?dns={dec} HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
+    req_msg = req.encode()
+
+    wsock = ssl_connect(DOH_SERVER)
+    wsock.send(req_msg)
+    data = wsock.recv(2048)
+    print(f"data: {data}")
+    data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
+    response = DNS(data_body)
+    response[DNS].id = req_id
+
+    return bytes(response)
+
+
 def main():
     sock = udp_connect(UDP_IP, UDP_PORT)
-    req_data, addr = sock.recvfrom(512)
+    while True:
+        req_data, addr = sock.recvfrom(512)
+        hostname, record_type, req_id = req_records(req_data)
+        isDenied = isin_deny_list(hostname, record_type)
 
-    DNS(req_data).show()
+        if isDenied:
+            nx = nxdomain(hostname, record_type, req_id)
+            sock.sendto(nx, addr)
+        else:
+            if (args.DOH == False and args.DOH_SERVER == None):
+                # send over DNS
+                data = udp_forward(req_data)
+            else:
+                data = doh_forward(req_data, hostname, record_type, req_id)
 
-    hostname, record_type, req_id = req_records(req_data)
-    print(f"hostname: {hostname}")
-    isDenied = isin_deny_list(hostname, record_type)
-    if isDenied:
-        nx = nxdomain(hostname, record_type, req_id)
-        sock.sendto(nx, addr)
-
-    # print(f"Denied: {isDenied}")
-
-    # content_length = len(req_data)
-    # req_header = f"POST /dns-query HTTP/1.1\r\nContent-Type: application/dns-message\r\nContent-Length:{content_length}\r\nHost: 1.1.1.1\r\n\r\n"
-    # req = bytes(req_header, 'utf-8') + req_data
-
-    # wsock = ssl_connect(DOH_HOST)
-
-    # wsock.send(req)
-    # data = wsock.recv(2048)
-    # print(f"data: {data}")
-    # data_body = data.split("\r\n\r\n".encode('utf-8'))[1]
-    # print(f"body: {data_body}")
-    # sock.sendto(data_body, addr)
+            sock.sendto(data, addr)
 
 
 if __name__ == "__main__":
