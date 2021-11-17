@@ -19,12 +19,10 @@ optional arguments:
 ## Requirements:
 * If --doh or --doh_server are specified, the forwarder MUST forward the DNS query using the DoH protocol
 * If neither --doh nor --doh_server are specified (in which case -d MUST be present), the forwarder MUST forward the DNS query using the DNS protocol
-* The DNS forwarder MUST receive DNS messages from the client via a simple UDP server socket.
 * When DoH is not used, the -d option will be specified and the forwarder must use a simple UDP client socket to forward the client's query to the DNS resolver
-* The DENY_LIST_FILE file MUST contain a (potentially empty) list of domain names that MUST be blocked by the forwarder. 
 
 ## Log File Entry Format
-The log file should be a text file containing a record of all domain names and query types that have been requested, and whether the request was blocked or allowed. For instance:
+The log file is a text file containing a record of all domain names and query types that have been requested, and whether the request was blocked or allowed. For instance:
 ```
 www.google.com A ALLOW
 google.com NS ALLOW
